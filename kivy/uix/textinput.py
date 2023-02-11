@@ -2785,9 +2785,7 @@ class TextInput(FocusBehavior, Widget):
 
         return lines, lines_flags
 
-    def _key_down(self, key, repeat=False):
-        displayed_str, internal_str, internal_action, scale = key
-
+    def _key_down(self, internal_action):
         # handle deletion
         if (
             self._selection
@@ -2807,11 +2805,7 @@ class TextInput(FocusBehavior, Widget):
         elif internal_action == 'backspace':
             self.do_backspace()
 
-        # handle action keys and text insertion
-        if internal_action is None:
-            self.insert_text(displayed_str)
-
-        elif internal_action in ('shift', 'shift_L', 'shift_R'):
+        if internal_action in ('shift', 'shift_L', 'shift_R'):
             if not self._selection:
                 self._selection_from = self._selection_to = self.cursor_index()
                 self._selection = True
@@ -2853,8 +2847,7 @@ class TextInput(FocusBehavior, Widget):
         elif internal_action == 'escape':
             self.focus = False
 
-    def _key_up(self, key, repeat=False):
-        displayed_str, internal_str, internal_action, scale = key
+    def _key_up(self, internal_action):
         if internal_action in ('shift', 'shift_L', 'shift_R'):
             if self._selection:
                 self._update_selection(True)
@@ -2939,8 +2932,7 @@ class TextInput(FocusBehavior, Widget):
 
         k = self.interesting_keys.get(key)
         if k:
-            key = (None, None, k, 1)
-            self._key_down(key)
+            self._key_down(k)
 
     def _handle_command(self, command):
         from_undo = True
@@ -2995,12 +2987,19 @@ class TextInput(FocusBehavior, Widget):
         key = keycode[0]
         k = self.interesting_keys.get(key)
         if k:
-            key = (None, None, k, 1)
-            self._key_up(key)
+            self._key_up(k)
 
     def keyboard_on_textinput(self, window, text):
         if self._selection:
             self.delete_selection()
+        if self._ime_composition:
+            self._replace_ime(text)
+            self._ime_composition = ''
+        if text.endswith('\n') and not self.multiline:
+            text = text.rstrip('\n')
+            self.dispatch('on_text_validate')
+            if self.text_validate_unfocus:
+                self.focus = False
         self.insert_text(text, False)
 
     # current IME composition in progress by the IME system, or '' if nothing
@@ -3016,20 +3015,24 @@ class TextInput(FocusBehavior, Widget):
         super()._unbind_keyboard()
         Window.unbind(on_textedit=self.window_on_textedit)
 
+    def _replace_ime(self, ime_input):
+        pcc, pcr = self._ime_cursor
+        text_lines = self._lines or ['']
+        text = text_lines[pcr]
+        len_ime = len(self._ime_composition)
+        if text[pcc - len_ime:pcc] == self._ime_composition:  # always?
+            remove_old_ime_text = text[:pcc - len_ime] + text[pcc:]
+            ci = self.cursor_index()
+            self._refresh_text_from_property(
+                "insert",
+                *self._get_line_from_cursor(pcr, remove_old_ime_text)
+            )
+            self.cursor = self.get_cursor_from_index(ci - len_ime)
+
     def window_on_textedit(self, window, ime_input):
         text_lines = self._lines or ['']
         if self._ime_composition:
-            pcc, pcr = self._ime_cursor
-            text = text_lines[pcr]
-            len_ime = len(self._ime_composition)
-            if text[pcc - len_ime:pcc] == self._ime_composition:  # always?
-                remove_old_ime_text = text[:pcc - len_ime] + text[pcc:]
-                ci = self.cursor_index()
-                self._refresh_text_from_property(
-                    "insert",
-                    *self._get_line_from_cursor(pcr, remove_old_ime_text)
-                )
-                self.cursor = self.get_cursor_from_index(ci - len_ime)
+            self._replace_ime(ime_input)
 
         if ime_input:
             if self._selection:
@@ -3040,9 +3043,7 @@ class TextInput(FocusBehavior, Widget):
             self._refresh_text_from_property(
                 "insert", *self._get_line_from_cursor(cr, new_text)
             )
-            self.cursor = self.get_cursor_from_index(
-                self.cursor_index() + len(ime_input)
-            )
+            self.cursor = cc + len(ime_input), cr
         self._ime_composition = ime_input
         self._ime_cursor = self.cursor
 
